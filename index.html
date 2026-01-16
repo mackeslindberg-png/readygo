@@ -6,7 +6,7 @@
   <title>Ready Go</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 16px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 520px; margin: 0 auto; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 540px; margin: 0 auto; }
     h1 { margin: 0 0 12px 0; font-size: 22px; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
     label { display: inline-flex; align-items: center; gap: 8px; }
@@ -24,24 +24,21 @@
     <h1>Ready Go</h1>
 
     <div class="row">
-      <div>
-        <div style="font-weight:600; margin-bottom:6px;">Startfördröjning (slump)</div>
-        <label><input type="radio" name="startWindow" value="2-4" checked> 2–4 sek</label>
-        <label style="margin-left:12px;"><input type="radio" name="startWindow" value="3-6"> 3–6 sek</label>
+      <div style="flex:1;">
+        <div style="font-weight:600; margin-bottom:6px;">Hastighetsläge</div>
+        <select id="mode">
+          <option value="fast" selected>Snabb (readygo)</option>
+          <option value="mid">Mellan (2,0 sek total)</option>
+          <option value="slow">Långsam (2,4 sek total)</option>
+        </select>
       </div>
     </div>
 
     <div class="row">
-      <div style="flex:1;">
-        <div style="font-weight:600; margin-bottom:6px;">Talhastighet</div>
-        <select id="speed">
-          <option value="0.70">1/5 (långsam)</option>
-          <option value="0.90">2/5</option>
-          <option value="1.10" selected>3/5 (normal)</option>
-          <option value="1.55">4/5 (nästan snabb)</option>
-          <option value="2.20">5/5 (snabb: readygo)</option>
-          <option value="shuffle">Shuffle (blanda)</option>
-        </select>
+      <div>
+        <div style="font-weight:600; margin-bottom:6px;">Startfördröjning (slump)</div>
+        <label><input type="radio" name="startWindow" value="2-4" checked> 2–4 sek</label>
+        <label style="margin-left:12px;"><input type="radio" name="startWindow" value="3-6"> 3–6 sek</label>
       </div>
     </div>
 
@@ -52,7 +49,7 @@
     <div class="small">
       Tips: För bästa timing, undvik Bluetooth-högtalare/headset (kan ge fördröjning).
       <div style="margin-top:6px;">
-        Röst i webbläsaren kan variera mellan telefoner. Kvinnoröst kan inte garanteras här.
+        Om du får “röst laddas” länge: öppna i Chrome, tryck START igen, och höj mediavolymen.
       </div>
     </div>
 
@@ -66,33 +63,36 @@
 <script>
 (() => {
   const statusEl = document.getElementById('status');
-  const btn = document.getElementById('startStop');
-  const speedEl = document.getElementById('speed');
-  const repeatEl = document.getElementById('repeat');
   const voiceInfoEl = document.getElementById('voiceInfo');
+  const btn = document.getElementById('startStop');
+
+  const modeEl = document.getElementById('mode');
+  const repeatEl = document.getElementById('repeat');
 
   let running = false;
   let timers = [];
   let session = 0;
 
-  // 5 nivåer (samma som dropdownen) + används för shuffle
-  const SPEED_LEVELS = [0.70, 0.90, 1.10, 1.55, 2.20];
+  // Din snabba variant: sammanslaget "readygo"
+  const FAST_RATE = 2.2;
 
-  // Paus mellan "Ready" och "go!" per nivå (ms)
-  // Snabbaste (2.20) används inte (den säger "readygo" sammanslaget).
-  const PAUSE_BY_RATE = {
-   0.70: 260,
-  0.90: 180,
-  1.10: 120,
-   1.10: 120
+  // Måltider (total tid från start av "Ready" till slut av "go")
+  const TARGET_TOTAL_MS = {
+    mid: 2000,
+    slow: 2400
   };
+
+  // Vi mäter faktisk längd på "Ready" och "go" på just din telefon/röst,
+  // och räknar ut pausen för att hamna nära 2.0 / 2.4 sek.
+  // Lagrar senaste uppmätta "go"-tid per läge för att bli stabilt snabbt.
+  const lastGoMs = { mid: 450, slow: 450 };
 
   function clearTimers() {
     timers.forEach(t => clearTimeout(t));
     timers = [];
   }
 
-  function randInt(min, max) { // inclusive
+  function randInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
@@ -109,8 +109,15 @@
     return randInt(3000, 6000);
   }
 
+  // --- TTS / Voices ---
+
+  function getVoicesSafe() {
+    try { return speechSynthesis.getVoices() || []; }
+    catch { return []; }
+  }
+
   function pickVoicePreferFemaleEn() {
-    const voices = speechSynthesis.getVoices() || [];
+    const voices = getVoicesSafe();
     if (!voices.length) return null;
 
     const femaleHints = ["female", "woman", "jenny", "susan", "emma", "zira", "samantha"];
@@ -123,90 +130,108 @@
 
   function refreshVoices() {
     chosenVoice = pickVoicePreferFemaleEn();
+    const voices = getVoicesSafe();
     if (chosenVoice) {
-      voiceInfoEl.textContent = chosenVoice.lang + " • " + chosenVoice.name;
+      voiceInfoEl.textContent = `${chosenVoice.lang} • ${chosenVoice.name} (${voices.length})`;
     } else {
-      voiceInfoEl.textContent = "ingen röst ännu";
+      // Viktigt: även om listan är tom kan TTS ändå funka i vissa browsers.
+      voiceInfoEl.textContent = voices.length ? `röst ej vald (${voices.length})` : "röst laddas…";
     }
+  }
+
+  // Vänta aktivt på voices när användaren trycker START (Android kan vara seg här)
+  async function ensureVoicesLoaded(maxWaitMs = 2500) {
+    const start = performance.now();
+
+    // kicka igång voice-laddningen i vissa browsers
+    refreshVoices();
+
+    while (performance.now() - start < maxWaitMs) {
+      const v = getVoicesSafe();
+      if (v.length) {
+        refreshVoices();
+        return true;
+      }
+      await new Promise(r => setTimeout(r, 150));
+      refreshVoices();
+    }
+    // Fallback: vi går vidare ändå (kan fortfarande låta).
+    refreshVoices();
+    return false;
   }
 
   speechSynthesis.onvoiceschanged = refreshVoices;
-  refreshVoices();
+  // extra refresh efter en kort stund (hjälper ibland på Android)
+  setTimeout(refreshVoices, 300);
 
-  function pickRate() {
-    const mode = speedEl.value;
-    if (mode === "shuffle") {
-      return SPEED_LEVELS[randInt(0, SPEED_LEVELS.length - 1)];
-    }
-    return parseFloat(mode);
-  }
+  // --- Speak helpers ---
 
-  function pauseForRate(rate) {
-    if (rate >= 2.0) return 0; // används inte (readygo)
-    const nearest = SPEED_LEVELS.reduce((best, cur) =>
-      Math.abs(cur - rate) < Math.abs(best - rate) ? cur : best
-    , SPEED_LEVELS[0]);
-
-    return PAUSE_BY_RATE[nearest] ?? 150;
-  }
-
-  function speakReadyGoOnce() {
-    speechSynthesis.cancel();
-
-    const rate = pickRate();
-
-    // 5/5: sammanslaget
-    if (rate >= 2.0) {
-      setStatus("readygo!");
-      const u = new SpeechSynthesisUtterance("readygo");
+  function speakUtterance(text, { rate, idTag }) {
+    return new Promise(resolve => {
+      const u = new SpeechSynthesisUtterance(text);
       u.lang = "en-US";
       u.rate = rate;
       if (chosenVoice) u.voice = chosenVoice;
 
-      return new Promise(resolve => {
-        u.onend = resolve;
-        u.onerror = resolve;
-        speechSynthesis.speak(u);
-      });
-    }
+      const t0 = performance.now();
+      u.onend = () => resolve(performance.now() - t0);
+      u.onerror = () => resolve(performance.now() - t0);
 
-    // 1–4/5: Ready ... go!
-    setStatus("Ready...");
-    const u1 = new SpeechSynthesisUtterance("Ready");
-    u1.lang = "en-US";
-    u1.rate = rate;
-    if (chosenVoice) u1.voice = chosenVoice;
-
-    const u2 = new SpeechSynthesisUtterance("go!");
-    u2.lang = "en-US";
-    u2.rate = rate;
-    if (chosenVoice) u2.voice = chosenVoice;
-
-    const pauseMs = pauseForRate(rate);
-
-    return new Promise(resolve => {
-      u2.onend = resolve;
-      u2.onerror = resolve;
-
-      u1.onend = () => {
-        if (!running) return;
-        setStatus("...go");
-        timers.push(setTimeout(() => {
-          if (!running) return;
-          speechSynthesis.speak(u2);
-        }, pauseMs));
-      };
-
-      u1.onerror = resolve;
-
-      speechSynthesis.speak(u1);
+      speechSynthesis.speak(u);
     });
+  }
+
+  async function speakFastReadyGo() {
+    // Snabb: sammanslaget
+    setStatus("readygo!");
+    speechSynthesis.cancel();
+    await speakUtterance("readygo", { rate: FAST_RATE, idTag: "fast" });
+  }
+
+  async function speakTimedReadyGo(mode) {
+    // Långsam/mellan: Ready ... go! där totalen ~ target ms
+    const target = TARGET_TOTAL_MS[mode];
+
+    speechSynthesis.cancel();
+
+    setStatus("Ready...");
+    const readyMs = await speakUtterance("Ready", { rate: 1.0, idTag: mode + "_ready" });
+
+    if (!running) return;
+
+    // Beräkna paus så att: readyMs + pause + goMs ≈ target
+    // goMs använder senaste uppmätta go-tid som estimat (stabilt från andra körningen)
+    let pauseMs = Math.max(0, Math.round(target - readyMs - lastGoMs[mode]));
+
+    // hårda gränser så den inte blir knäpp
+    if (pauseMs > 3000) pauseMs = 3000;
+
+    setStatus("...go");
+    await new Promise(r => timers.push(setTimeout(r, pauseMs)));
+
+    if (!running) return;
+
+    const goMs = await speakUtterance("go!", { rate: 1.0, idTag: mode + "_go" });
+    lastGoMs[mode] = Math.round(goMs);
+  }
+
+  async function speakOnce() {
+    const mode = modeEl.value;
+
+    // voices-laddning (för att undvika "röst laddas" / tyst)
+    await ensureVoicesLoaded(2500);
+
+    if (!running) return;
+
+    if (mode === "fast") return speakFastReadyGo();
+    if (mode === "mid") return speakTimedReadyGo("mid");
+    return speakTimedReadyGo("slow");
   }
 
   async function runLoop(mySession) {
     if (!running || mySession !== session) return;
 
-    await speakReadyGoOnce();
+    await speakOnce();
 
     if (!running || mySession !== session) return;
 
@@ -220,7 +245,13 @@
     timers.push(setTimeout(() => runLoop(mySession), gap));
   }
 
-  function start() {
+  function lockControls(locked) {
+    document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = locked);
+    modeEl.disabled = locked;
+    repeatEl.disabled = locked;
+  }
+
+  async function start() {
     running = true;
     session++;
     const mySession = session;
@@ -229,11 +260,11 @@
     btn.classList.remove("start");
     btn.classList.add("stop");
 
-    document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = true);
-    speedEl.disabled = true;
-    repeatEl.disabled = true;
+    lockControls(true);
 
-    refreshVoices();
+    // Vänta på röster direkt på klick (user gesture)
+    setStatus("laddar röst…");
+    await ensureVoicesLoaded(2500);
 
     const delay = getStartWindowMs();
     setStatus(`start om ${Math.round(delay/1000)}s`);
@@ -254,9 +285,7 @@
     btn.classList.remove("stop");
     btn.classList.add("start");
 
-    document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = false);
-    speedEl.disabled = false;
-    repeatEl.disabled = false;
+    lockControls(false);
 
     setStatus("redo");
   }
@@ -269,6 +298,8 @@
   document.addEventListener("visibilitychange", () => {
     if (document.hidden && running) stop();
   });
+
+  refreshVoices();
 })();
 </script>
 </body>
