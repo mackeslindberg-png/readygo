@@ -6,7 +6,7 @@
   <title>Ready Go</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 16px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 540px; margin: 0 auto; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 520px; margin: 0 auto; }
     h1 { margin: 0 0 12px 0; font-size: 22px; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
     label { display: inline-flex; align-items: center; gap: 8px; }
@@ -14,7 +14,6 @@
     button { width: 100%; height: 52px; border: 0; border-radius: 12px; cursor: pointer; }
     button.start { background: #111; color: #fff; }
     button.stop { background: #b00020; color: #fff; }
-    .small { color: #444; font-size: 13px; line-height: 1.4; }
     .status { margin-top: 10px; font-weight: 600; }
     .pill { display:inline-block; padding: 2px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; color:#333; }
   </style>
@@ -67,14 +66,9 @@
   let timers = [];
   let session = 0;
 
-  const FAST_RATE = 2.2;
-
-  const TARGET_TOTAL_MS = {
-    mid: 1500,
-    slow: 2400
-  };
-
-  const lastGoMs = { mid: 400, slow: 400 };
+  const FAST_RATE = 2.2;     // snabbaste (sammanslaget)
+  const PAUSE_MID = 700;    // ms -> ~1,5 s total
+  const PAUSE_SLOW = 1100;  // ms -> ~2,4 s total
 
   function clearTimers() {
     timers.forEach(t => clearTimeout(t));
@@ -98,6 +92,7 @@
     return randInt(3000, 6000);
   }
 
+  // ---------- VOICES ----------
   function getVoicesSafe() {
     try { return speechSynthesis.getVoices() || []; }
     catch { return []; }
@@ -106,8 +101,7 @@
   function pickVoicePreferFemaleEn() {
     const voices = getVoicesSafe();
     if (!voices.length) return null;
-
-    const femaleHints = ["female", "woman", "jenny", "susan", "emma", "zira", "samantha"];
+    const femaleHints = ["female","woman","jenny","susan","emma","zira","samantha"];
     const en = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
     const hinted = en.find(v => femaleHints.some(h => (v.name || "").toLowerCase().includes(h)));
     return hinted || en[0] || voices[0];
@@ -143,52 +137,45 @@
       u.lang = "en-US";
       u.rate = rate;
       if (chosenVoice) u.voice = chosenVoice;
-      const t0 = performance.now();
-      u.onend = () => resolve(performance.now() - t0);
-      u.onerror = () => resolve(performance.now() - t0);
+      u.onend = resolve;
+      u.onerror = resolve;
       speechSynthesis.speak(u);
     });
   }
 
-  async function speakFast() {
-    setStatus("readygo!");
-    speechSynthesis.cancel();
-    await speak("readygo", FAST_RATE);
-  }
-
-  async function speakTimed(mode) {
-    const target = TARGET_TOTAL_MS[mode];
-    speechSynthesis.cancel();
-
-    setStatus("Ready...");
-    const readyMs = await speak("Ready", 1.0);
+  // ---------- CORE ----------
+  async function speakOnce() {
+    await ensureVoicesLoaded();
     if (!running) return;
 
-    let pauseMs = Math.max(0, Math.round(target - readyMs - lastGoMs[mode]));
-    if (pauseMs > 3000) pauseMs = 3000;
+    speechSynthesis.cancel();
+    const mode = modeEl.value;
+
+    // SNABB
+    if (mode === "fast") {
+      setStatus("readygo!");
+      await speak("readygo", FAST_RATE);
+      return;
+    }
+
+    // MELLAN / LÅNGSAM
+    const pauseMs = mode === "mid" ? PAUSE_MID : PAUSE_SLOW;
+
+    setStatus("Ready...");
+    await speak("Ready", 1.0);
+    if (!running) return;
 
     setStatus("...go");
     await new Promise(r => timers.push(setTimeout(r, pauseMs)));
     if (!running) return;
 
-    const goMs = await speak("go!", 1.0);
-    lastGoMs[mode] = Math.round(goMs);
-  }
-
-  async function speakOnce() {
-    await ensureVoicesLoaded();
-    if (!running) return;
-
-    if (modeEl.value === "fast") return speakFast();
-    if (modeEl.value === "mid") return speakTimed("mid");
-    return speakTimed("slow");
+    await speak("go!", 1.0);
   }
 
   async function runLoop(mySession) {
     if (!running || mySession !== session) return;
 
     await speakOnce();
-
     if (!running || mySession !== session) return;
 
     if (!repeatEl.checked) {
