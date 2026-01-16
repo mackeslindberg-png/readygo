@@ -1,0 +1,234 @@
+index.html
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ready Go</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 520px; margin: 0 auto; }
+    h1 { margin: 0 0 12px 0; font-size: 22px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+    label { display: inline-flex; align-items: center; gap: 8px; }
+    select, button { font-size: 16px; padding: 10px 12px; }
+    button { width: 100%; height: 52px; border: 0; border-radius: 12px; cursor: pointer; }
+    button.start { background: #111; color: #fff; }
+    button.stop { background: #b00020; color: #fff; }
+    .small { color: #444; font-size: 13px; line-height: 1.4; }
+    .status { margin-top: 10px; font-weight: 600; }
+    .pill { display:inline-block; padding: 2px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; color:#333; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Ready Go</h1>
+
+    <div class="row">
+      <div>
+        <div style="font-weight:600; margin-bottom:6px;">Startfördröjning (slump)</div>
+        <label><input type="radio" name="startWindow" value="2-4" checked> 2–4 sek</label>
+        <label style="margin-left:12px;"><input type="radio" name="startWindow" value="3-6"> 3–6 sek</label>
+      </div>
+    </div>
+
+    <div class="row">
+      <div style="flex:1;">
+        <div style="font-weight:600; margin-bottom:6px;">Talhastighet</div>
+        <select id="speed">
+          <option value="0.75">1/5 (långsam)</option>
+          <option value="0.90">2/5</option>
+          <option value="1.00" selected>3/5 (normal)</option>
+          <option value="1.15">4/5</option>
+          <option value="1.30">5/5 (snabb)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <label><input type="checkbox" id="repeat"> Repetera (slump 3–6 sek mellan)</label>
+    </div>
+
+    <div class="small">
+      Tips: För bästa timing, undvik Bluetooth-högtalare/headset (kan ge fördröjning).
+      <div style="margin-top:6px;">
+        Röst i webbläsaren kan variera mellan telefoner. Kvinnoröst kan inte garanteras här.
+      </div>
+    </div>
+
+    <div class="status" id="status">Status: redo <span class="pill" id="voiceInfo">röst laddas…</span></div>
+
+    <div class="row" style="margin-top:14px;">
+      <button id="startStop" class="start">START</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const statusEl = document.getElementById('status');
+  const btn = document.getElementById('startStop');
+  const speedEl = document.getElementById('speed');
+  const repeatEl = document.getElementById('repeat');
+  const voiceInfoEl = document.getElementById('voiceInfo');
+
+  let running = false;
+  let timers = [];
+  let session = 0;
+
+  function clearTimers() {
+    timers.forEach(t => clearTimeout(t));
+    timers = [];
+  }
+
+  function randInt(min, max) { // inclusive
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  function getStartWindowMs() {
+    const v = document.querySelector('input[name="startWindow"]:checked').value;
+    if (v === '2-4') return randInt(2000, 4000);
+    return randInt(3000, 6000);
+  }
+
+  function getRepeatGapMs() {
+    return randInt(3000, 6000);
+  }
+
+  function setStatus(text) {
+    statusEl.firstChild.textContent = "Status: " + text + " ";
+  }
+
+  function pickVoicePreferFemaleEn() {
+    const voices = speechSynthesis.getVoices() || [];
+    if (!voices.length) return null;
+
+    // Försök hitta en engelsk röst som "låter" kvinnlig via namn, annars bara en en-US/engelsk.
+    const femaleHints = ["female", "woman", "jenny", "susan", "emma", "zira", "samantha"];
+    const enVoices = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
+    const hinted = enVoices.find(v => femaleHints.some(h => (v.name || "").toLowerCase().includes(h)));
+    return hinted || enVoices[0] || voices[0];
+  }
+
+  let chosenVoice = null;
+
+  function refreshVoices() {
+    chosenVoice = pickVoicePreferFemaleEn();
+    if (chosenVoice) {
+      voiceInfoEl.textContent = chosenVoice.lang + " • " + chosenVoice.name;
+    } else {
+      voiceInfoEl.textContent = "ingen röst ännu";
+    }
+  }
+
+  // Röster laddas ibland lite senare
+  speechSynthesis.onvoiceschanged = refreshVoices;
+  refreshVoices();
+
+  function speakReadyGo() {
+    // Avbryt ev kö
+    speechSynthesis.cancel();
+
+    const rate = parseFloat(speedEl.value);
+
+    // "Ready..." separat + "go!" separat ger tydligare paus
+    const u1 = new SpeechSynthesisUtterance("Ready");
+    u1.lang = "en-US";
+    u1.rate = rate;
+    if (chosenVoice) u1.voice = chosenVoice;
+
+    const u2 = new SpeechSynthesisUtterance("go!");
+    u2.lang = "en-US";
+    u2.rate = rate;
+    if (chosenVoice) u2.voice = chosenVoice;
+
+    // Liten paus mellan (ms). Justera om du vill.
+    u1.onend = () => {
+      if (!running) return;
+      timers.push(setTimeout(() => {
+        if (!running) return;
+        speechSynthesis.speak(u2);
+      }, 250));
+    };
+
+    speechSynthesis.speak(u1);
+
+    return new Promise(resolve => {
+      u2.onend = resolve;
+      u2.onerror = resolve;
+    });
+  }
+
+  async function runOnce(mySession) {
+    if (!running || mySession !== session) return;
+
+    setStatus("Ready...");
+    await speakReadyGo();
+
+    if (!running || mySession !== session) return;
+
+    if (!repeatEl.checked) {
+      stop();
+      return;
+    }
+
+    const gap = getRepeatGapMs();
+    setStatus(`väntar (${Math.round(gap/1000)}–${Math.round(gap/1000)}s)`);
+    timers.push(setTimeout(() => runOnce(mySession), gap));
+  }
+
+  function start() {
+    running = true;
+    session++;
+    const mySession = session;
+
+    btn.textContent = "STOPP";
+    btn.classList.remove("start");
+    btn.classList.add("stop");
+
+    // Lås kontroller under körning
+    document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = true);
+    speedEl.disabled = true;
+    repeatEl.disabled = true;
+
+    // Måste triggas av användarklick för att webbläsare ska tillåta ljud
+    refreshVoices();
+
+    const delay = getStartWindowMs();
+    setStatus(`start om ${Math.round(delay/1000)}s`);
+
+    clearTimers();
+    timers.push(setTimeout(() => {
+      if (!running || mySession !== session) return;
+      runOnce(mySession);
+    }, delay));
+  }
+
+  function stop() {
+    running = false;
+    clearTimers();
+    speechSynthesis.cancel();
+
+    btn.textContent = "START";
+    btn.classList.remove("stop");
+    btn.classList.add("start");
+
+    document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = false);
+    speedEl.disabled = false;
+    repeatEl.disabled = false;
+
+    setStatus("redo");
+  }
+
+  btn.addEventListener("click", () => {
+    if (running) stop();
+    else start();
+  });
+
+  // Om fliken går i bakgrunden: stoppa för säkerhets skull
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && running) stop();
+  });
+})();
+</script>
+</body>
+</html>
