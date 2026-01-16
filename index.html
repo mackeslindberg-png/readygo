@@ -38,7 +38,7 @@
           <option value="0.70">1/5 (långsam)</option>
           <option value="0.90">2/5</option>
           <option value="1.10" selected>3/5 (normal)</option>
-          <option value="1.35">4/5</option>
+          <option value="1.55">4/5 (nästan snabb)</option>
           <option value="2.20">5/5 (snabb: readygo)</option>
           <option value="shuffle">Shuffle (blanda)</option>
         </select>
@@ -76,15 +76,15 @@
   let session = 0;
 
   // 5 nivåer (samma som dropdownen) + används för shuffle
-  const SPEED_LEVELS = [0.70, 0.90, 1.10, 1.35, 2.20];
+  const SPEED_LEVELS = [0.70, 0.90, 1.10, 1.55, 2.20];
 
   // Paus mellan "Ready" och "go!" per nivå (ms)
-  // Snabbaste används inte (den säger "readygo" sammanslaget).
+  // Snabbaste (2.20) används inte (den säger "readygo" sammanslaget).
   const PAUSE_BY_RATE = {
     0.70: 260,
     0.90: 180,
     1.10: 120,
-    1.35: 70
+    1.55: 45
   };
 
   function clearTimers() {
@@ -142,9 +142,7 @@
   }
 
   function pauseForRate(rate) {
-    // Snabbaste använder inte ready/go-separat
-    if (rate >= 2.0) return 0;
-    // Matcha närmaste nivå ifall webbläsaren ger float-avvikelser
+    if (rate >= 2.0) return 0; // används inte (readygo)
     const nearest = SPEED_LEVELS.reduce((best, cur) =>
       Math.abs(cur - rate) < Math.abs(best - rate) ? cur : best
     , SPEED_LEVELS[0]);
