@@ -16,6 +16,7 @@
     button.stop { background: #b00020; color: #fff; }
     .status { margin-top: 10px; font-weight: 600; }
     .pill { display:inline-block; padding: 2px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; color:#333; }
+    .muted { color:#444; font-size: 13px; line-height: 1.4; }
   </style>
 </head>
 <body>
@@ -24,14 +25,20 @@
 
     <div class="row">
       <div style="flex:1;">
-        <div style="font-weight:600; margin-bottom:6px;">Hastighetsläge</div>
+        <div style="font-weight:600; margin-bottom:6px;">Röstläge</div>
         <select id="mode">
-          <option value="fast">Snabb (readygo)</option>
-          <option value="mid">Mellan (1,5 sek)</option>
-          <option value="slow">Långsam (2,4 sek)</option>
-          <option value="shuffle" selected>Shuffle (alla)</option>
+          <option value="fast" selected>Snabb (readygo)</option>
+          <option value="mid">Mellan (1,5 s)</option>
+          <option value="slow">Långsam (2,4 s)</option>
         </select>
+        <div class="muted" style="margin-top:6px;">
+          Bocka i Shuffle för att slumpa snabb/mellan/långsam varje gång den pratar.
+        </div>
       </div>
+    </div>
+
+    <div class="row">
+      <label><input type="checkbox" id="shuffle"> Shuffle (slumpa röstläge + tid)</label>
     </div>
 
     <div class="row">
@@ -40,6 +47,10 @@
         <label><input type="radio" name="startWindow" value="2-4" checked> 2–4 sek</label>
         <label style="margin-left:12px;"><input type="radio" name="startWindow" value="3-6"> 3–6 sek</label>
       </div>
+    </div>
+
+    <div class="row">
+      <label><input type="checkbox" id="shuffleStart"> Shuffle startfönster (2–4 eller 3–6)</label>
     </div>
 
     <div class="row">
@@ -60,16 +71,22 @@
   const statusEl = document.getElementById('status');
   const voiceInfoEl = document.getElementById('voiceInfo');
   const btn = document.getElementById('startStop');
+
   const modeEl = document.getElementById('mode');
+  const shuffleEl = document.getElementById('shuffle');
+
   const repeatEl = document.getElementById('repeat');
+
+  const shuffleStartEl = document.getElementById('shuffleStart');
 
   let running = false;
   let timers = [];
   let session = 0;
 
-  const FAST_RATE = 2.2;
-  const PAUSE_MID = 700;
-  const PAUSE_SLOW = 1100;
+  // --- Tunables ---
+  const FAST_RATE = 2.2;   // snabbaste: "readygo" sammanslaget
+  const PAUSE_MID  = 700;  // Ready -> (700ms) -> go  ~ 1.5s total
+  const PAUSE_SLOW = 1100; // Ready -> (1100ms) -> go ~ 2.4s total
 
   function clearTimers() {
     timers.forEach(t => clearTimeout(t));
@@ -84,8 +101,17 @@
     statusEl.firstChild.textContent = "Status: " + text + " ";
   }
 
+  // --- Start window selection ---
+  function pickStartWindow() {
+    // returns "2-4" or "3-6"
+    if (shuffleStartEl.checked) {
+      return randInt(0, 1) === 0 ? "2-4" : "3-6";
+    }
+    return document.querySelector('input[name="startWindow"]:checked').value;
+  }
+
   function getStartWindowMs() {
-    const v = document.querySelector('input[name="startWindow"]:checked').value;
+    const v = pickStartWindow();
     return v === '2-4' ? randInt(2000, 4000) : randInt(3000, 6000);
   }
 
@@ -93,7 +119,14 @@
     return randInt(3000, 6000);
   }
 
-  // ---- VOICES ----
+  // --- Mode selection ---
+  function pickMode() {
+    if (!shuffleEl.checked) return modeEl.value; // fast/mid/slow
+    const modes = ["fast", "mid", "slow"];
+    return modes[randInt(0, modes.length - 1)];
+  }
+
+  // --- Voices / TTS ---
   function getVoicesSafe() {
     try { return speechSynthesis.getVoices() || []; }
     catch { return []; }
@@ -144,12 +177,7 @@
     });
   }
 
-  function pickMode() {
-    if (modeEl.value !== "shuffle") return modeEl.value;
-    const modes = ["fast", "mid", "slow"];
-    return modes[randInt(0, modes.length - 1)];
-  }
-
+  // --- Core speaking ---
   async function speakOnce() {
     await ensureVoicesLoaded();
     if (!running) return;
@@ -196,6 +224,8 @@
   function lockControls(lock) {
     document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = lock);
     modeEl.disabled = lock;
+    shuffleEl.disabled = lock;
+    shuffleStartEl.disabled = lock;
     repeatEl.disabled = lock;
   }
 
