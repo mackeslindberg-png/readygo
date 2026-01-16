@@ -28,8 +28,8 @@
         <div style="font-weight:600; margin-bottom:6px;">Hastighetsläge</div>
         <select id="mode">
           <option value="fast" selected>Snabb (readygo)</option>
-          <option value="mid">Mellan (2,0 sek total)</option>
-          <option value="slow">Långsam (2,4 sek total)</option>
+          <option value="mid">Mellan (1,5 sek)</option>
+          <option value="slow">Långsam (2,4 sek)</option>
         </select>
       </div>
     </div>
@@ -46,14 +46,9 @@
       <label><input type="checkbox" id="repeat"> Repetera (slump 3–6 sek mellan)</label>
     </div>
 
-    <div class="small">
-      Tips: För bästa timing, undvik Bluetooth-högtalare/headset (kan ge fördröjning).
-      <div style="margin-top:6px;">
-        Om du får “röst laddas” länge: öppna i Chrome, tryck START igen, och höj mediavolymen.
-      </div>
+    <div class="status" id="status">
+      Status: redo <span class="pill" id="voiceInfo">röst laddas…</span>
     </div>
-
-    <div class="status" id="status">Status: redo <span class="pill" id="voiceInfo">röst laddas…</span></div>
 
     <div class="row" style="margin-top:14px;">
       <button id="startStop" class="start">START</button>
@@ -65,7 +60,6 @@
   const statusEl = document.getElementById('status');
   const voiceInfoEl = document.getElementById('voiceInfo');
   const btn = document.getElementById('startStop');
-
   const modeEl = document.getElementById('mode');
   const repeatEl = document.getElementById('repeat');
 
@@ -73,19 +67,14 @@
   let timers = [];
   let session = 0;
 
-  // Din snabba variant: sammanslaget "readygo"
   const FAST_RATE = 2.2;
 
-  // Måltider (total tid från start av "Ready" till slut av "go")
   const TARGET_TOTAL_MS = {
-    mid: 2000,
+    mid: 1500,
     slow: 2400
   };
 
-  // Vi mäter faktisk längd på "Ready" och "go" på just din telefon/röst,
-  // och räknar ut pausen för att hamna nära 2.0 / 2.4 sek.
-  // Lagrar senaste uppmätta "go"-tid per läge för att bli stabilt snabbt.
-  const lastGoMs = { mid: 450, slow: 450 };
+  const lastGoMs = { mid: 400, slow: 400 };
 
   function clearTimers() {
     timers.forEach(t => clearTimeout(t));
@@ -109,8 +98,6 @@
     return randInt(3000, 6000);
   }
 
-  // --- TTS / Voices ---
-
   function getVoicesSafe() {
     try { return speechSynthesis.getVoices() || []; }
     catch { return []; }
@@ -121,9 +108,9 @@
     if (!voices.length) return null;
 
     const femaleHints = ["female", "woman", "jenny", "susan", "emma", "zira", "samantha"];
-    const enVoices = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
-    const hinted = enVoices.find(v => femaleHints.some(h => (v.name || "").toLowerCase().includes(h)));
-    return hinted || enVoices[0] || voices[0];
+    const en = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
+    const hinted = en.find(v => femaleHints.some(h => (v.name || "").toLowerCase().includes(h)));
+    return hinted || en[0] || voices[0];
   }
 
   let chosenVoice = null;
@@ -131,101 +118,70 @@
   function refreshVoices() {
     chosenVoice = pickVoicePreferFemaleEn();
     const voices = getVoicesSafe();
-    if (chosenVoice) {
-      voiceInfoEl.textContent = `${chosenVoice.lang} • ${chosenVoice.name} (${voices.length})`;
-    } else {
-      // Viktigt: även om listan är tom kan TTS ändå funka i vissa browsers.
-      voiceInfoEl.textContent = voices.length ? `röst ej vald (${voices.length})` : "röst laddas…";
-    }
+    voiceInfoEl.textContent = chosenVoice
+      ? `${chosenVoice.lang} • ${chosenVoice.name}`
+      : (voices.length ? "röst ej vald" : "röst laddas…");
   }
 
-  // Vänta aktivt på voices när användaren trycker START (Android kan vara seg här)
   async function ensureVoicesLoaded(maxWaitMs = 2500) {
     const start = performance.now();
-
-    // kicka igång voice-laddningen i vissa browsers
     refreshVoices();
-
     while (performance.now() - start < maxWaitMs) {
-      const v = getVoicesSafe();
-      if (v.length) {
-        refreshVoices();
-        return true;
-      }
+      if (getVoicesSafe().length) return true;
       await new Promise(r => setTimeout(r, 150));
       refreshVoices();
     }
-    // Fallback: vi går vidare ändå (kan fortfarande låta).
-    refreshVoices();
     return false;
   }
 
   speechSynthesis.onvoiceschanged = refreshVoices;
-  // extra refresh efter en kort stund (hjälper ibland på Android)
   setTimeout(refreshVoices, 300);
 
-  // --- Speak helpers ---
-
-  function speakUtterance(text, { rate, idTag }) {
+  function speak(text, rate) {
     return new Promise(resolve => {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "en-US";
       u.rate = rate;
       if (chosenVoice) u.voice = chosenVoice;
-
       const t0 = performance.now();
       u.onend = () => resolve(performance.now() - t0);
       u.onerror = () => resolve(performance.now() - t0);
-
       speechSynthesis.speak(u);
     });
   }
 
-  async function speakFastReadyGo() {
-    // Snabb: sammanslaget
+  async function speakFast() {
     setStatus("readygo!");
     speechSynthesis.cancel();
-    await speakUtterance("readygo", { rate: FAST_RATE, idTag: "fast" });
+    await speak("readygo", FAST_RATE);
   }
 
-  async function speakTimedReadyGo(mode) {
-    // Långsam/mellan: Ready ... go! där totalen ~ target ms
+  async function speakTimed(mode) {
     const target = TARGET_TOTAL_MS[mode];
-
     speechSynthesis.cancel();
 
     setStatus("Ready...");
-    const readyMs = await speakUtterance("Ready", { rate: 1.0, idTag: mode + "_ready" });
-
+    const readyMs = await speak("Ready", 1.0);
     if (!running) return;
 
-    // Beräkna paus så att: readyMs + pause + goMs ≈ target
-    // goMs använder senaste uppmätta go-tid som estimat (stabilt från andra körningen)
     let pauseMs = Math.max(0, Math.round(target - readyMs - lastGoMs[mode]));
-
-    // hårda gränser så den inte blir knäpp
     if (pauseMs > 3000) pauseMs = 3000;
 
     setStatus("...go");
     await new Promise(r => timers.push(setTimeout(r, pauseMs)));
-
     if (!running) return;
 
-    const goMs = await speakUtterance("go!", { rate: 1.0, idTag: mode + "_go" });
+    const goMs = await speak("go!", 1.0);
     lastGoMs[mode] = Math.round(goMs);
   }
 
   async function speakOnce() {
-    const mode = modeEl.value;
-
-    // voices-laddning (för att undvika "röst laddas" / tyst)
-    await ensureVoicesLoaded(2500);
-
+    await ensureVoicesLoaded();
     if (!running) return;
 
-    if (mode === "fast") return speakFastReadyGo();
-    if (mode === "mid") return speakTimedReadyGo("mid");
-    return speakTimedReadyGo("slow");
+    if (modeEl.value === "fast") return speakFast();
+    if (modeEl.value === "mid") return speakTimed("mid");
+    return speakTimed("slow");
   }
 
   async function runLoop(mySession) {
@@ -245,10 +201,10 @@
     timers.push(setTimeout(() => runLoop(mySession), gap));
   }
 
-  function lockControls(locked) {
-    document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = locked);
-    modeEl.disabled = locked;
-    repeatEl.disabled = locked;
+  function lockControls(lock) {
+    document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = lock);
+    modeEl.disabled = lock;
+    repeatEl.disabled = lock;
   }
 
   async function start() {
@@ -257,14 +213,11 @@
     const mySession = session;
 
     btn.textContent = "STOPP";
-    btn.classList.remove("start");
-    btn.classList.add("stop");
-
+    btn.classList.replace("start", "stop");
     lockControls(true);
 
-    // Vänta på röster direkt på klick (user gesture)
     setStatus("laddar röst…");
-    await ensureVoicesLoaded(2500);
+    await ensureVoicesLoaded();
 
     const delay = getStartWindowMs();
     setStatus(`start om ${Math.round(delay/1000)}s`);
@@ -282,22 +235,14 @@
     speechSynthesis.cancel();
 
     btn.textContent = "START";
-    btn.classList.remove("stop");
-    btn.classList.add("start");
-
+    btn.classList.replace("stop", "start");
     lockControls(false);
 
     setStatus("redo");
   }
 
-  btn.addEventListener("click", () => {
-    if (running) stop();
-    else start();
-  });
-
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden && running) stop();
-  });
+  btn.addEventListener("click", () => running ? stop() : start());
+  document.addEventListener("visibilitychange", () => document.hidden && running && stop());
 
   refreshVoices();
 })();
