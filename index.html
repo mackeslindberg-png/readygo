@@ -39,7 +39,7 @@
           <option value="0.90">2/5</option>
           <option value="1.00" selected>3/5 (normal)</option>
           <option value="1.15">4/5</option>
-          <option value="1.70">5/5 (snabb)</option>
+          <option value="2.2">5/5 (snabb)</option>
         </select>
       </div>
     </div>
@@ -141,14 +141,17 @@
     if (chosenVoice) u2.voice = chosenVoice;
 
     // Liten paus mellan (ms). Justera om du vill.
-    u1.onend = () => {
-      if (!running) return;
-      timers.push(setTimeout(() => {
-        if (!running) return;
-        speechSynthesis.speak(u2);
-      }, rate > 1.3 ? 80 : 250));
+   u1.onend = () => {
+  if (!running) return;
 
-    };
+  const pauseMs = rate >= 2 ? 20 : 250;
+
+  timers.push(setTimeout(() => {
+    if (!running) return;
+    speechSynthesis.speak(u2);
+  }, pauseMs));
+};
+
 
     speechSynthesis.speak(u1);
 
