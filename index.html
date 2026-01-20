@@ -1,273 +1,197 @@
 <!doctype html>
 <html lang="sv">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Ready Go</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 16px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 520px; margin: 0 auto; }
-    h1 { margin: 0 0 12px 0; font-size: 22px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
-    label { display: inline-flex; align-items: center; gap: 8px; }
-    select, button { font-size: 16px; padding: 10px 12px; }
-    button { width: 100%; height: 52px; border: 0; border-radius: 12px; cursor: pointer; }
-    button.start { background: #111; color: #fff; }
-    button.stop { background: #b00020; color: #fff; }
-    .status { margin-top: 10px; font-weight: 600; }
-    .pill { display:inline-block; padding: 2px 8px; border: 1px solid #ddd; border-radius: 999px; font-size: 12px; color:#333; }
-    .muted { color:#444; font-size: 13px; line-height: 1.4; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ready Go</title>
+
+<style>
+html,body{
+  margin:0;
+  padding:0;
+  min-height:100%;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+body{
+  background:
+    linear-gradient(rgba(0,0,0,.75),rgba(0,0,0,.75)),
+    url("bg.png") no-repeat center center fixed;
+  background-size: cover;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.card{
+  width:100%;
+  max-width:520px;
+  background:rgba(255,255,255,.95);
+  border-radius:16px;
+  padding:16px;
+  box-shadow:0 12px 30px rgba(0,0,0,.4);
+}
+
+h1{margin:0 0 12px 0}
+
+.row{margin:12px 0}
+
+label{display:flex;gap:8px;align-items:center}
+
+select,button{
+  width:100%;
+  padding:12px;
+  font-size:16px;
+  border-radius:12px;
+}
+
+button{
+  border:none;
+  font-weight:700;
+  cursor:pointer;
+}
+
+.start{background:#111;color:#fff}
+.stop{background:#b00020;color:#fff}
+
+.status{margin-top:10px;font-weight:700}
+.small{font-size:13px;color:#444}
+</style>
 </head>
+
 <body>
-  <div class="card">
-    <h1>Ready Go</h1>
+<div class="card">
+  <h1>Ready Go</h1>
 
-    <div class="row">
-      <div style="flex:1;">
-        <div style="font-weight:600; margin-bottom:6px;">Röstläge</div>
-        <select id="mode">
-          <option value="fast" selected>Snabb (readygo)</option>
-          <option value="mid">Mellan (1,5 s)</option>
-          <option value="slow">Långsam (2,4 s)</option>
-        </select>
-        <div class="muted" style="margin-top:6px;">
-          Bocka i Shuffle för att slumpa snabb/mellan/långsam varje gång den pratar.
-        </div>
-      </div>
-    </div>
-
-    <div class="row">
-      <label><input type="checkbox" id="shuffle"> Shuffle (slumpa röstläge + tid)</label>
-    </div>
-
-    <div class="row">
-      <div>
-        <div style="font-weight:600; margin-bottom:6px;">Startfördröjning (slump)</div>
-        <label><input type="radio" name="startWindow" value="2-4" checked> 2–4 sek</label>
-        <label style="margin-left:12px;"><input type="radio" name="startWindow" value="3-6"> 3–6 sek</label>
-      </div>
-    </div>
-
-    <div class="row">
-      <label><input type="checkbox" id="shuffleStart"> Shuffle startfönster (2–4 eller 3–6)</label>
-    </div>
-
-    <div class="row">
-      <label><input type="checkbox" id="repeat"> Repetera (slump 3–6 sek mellan)</label>
-    </div>
-
-    <div class="status" id="status">
-      Status: redo <span class="pill" id="voiceInfo">röst laddas…</span>
-    </div>
-
-    <div class="row" style="margin-top:14px;">
-      <button id="startStop" class="start">START</button>
-    </div>
+  <div class="row">
+    <label>Röstläge</label>
+    <select id="mode">
+      <option value="fast">Snabb</option>
+      <option value="mid">Mellan</option>
+      <option value="slow">Långsam</option>
+    </select>
   </div>
 
+  <div class="row">
+    <label><input type="checkbox" id="shuffle"> Shuffle röstläge</label>
+  </div>
+
+  <div class="row">
+    <label>Startfördröjning</label>
+    <label><input type="radio" name="delay" value="2-4" checked> 2–4 sek</label>
+    <label><input type="radio" name="delay" value="3-6"> 3–6 sek</label>
+  </div>
+
+  <div class="row">
+    <label><input type="checkbox" id="repeat"> Repetera (3–6 sek)</label>
+  </div>
+
+  <div class="status" id="status">Status: redo</div>
+
+  <div class="row">
+    <button id="btn" class="start">START</button>
+  </div>
+
+  <div class="small">Första trycket låser upp ljud i mobilen.</div>
+</div>
+
 <script>
-(() => {
-  const statusEl = document.getElementById('status');
-  const voiceInfoEl = document.getElementById('voiceInfo');
-  const btn = document.getElementById('startStop');
+const audio = {
+  ready: new Audio("ready.mp3"),
+  go: new Audio("go.mp3"),
+  mid: new Audio("ready_mid.mp3")
+};
 
-  const modeEl = document.getElementById('mode');
-  const shuffleEl = document.getElementById('shuffle');
+Object.values(audio).forEach(a=>{
+  a.preload="auto";
+  a.playsInline=true;
+});
 
-  const repeatEl = document.getElementById('repeat');
+let running=false;
+let timer=null;
 
-  const shuffleStartEl = document.getElementById('shuffleStart');
+function rand(min,max){
+  return Math.floor(Math.random()*(max-min+1))+min;
+}
 
-  let running = false;
-  let timers = [];
-  let session = 0;
+function pickMode(){
+  if(!document.getElementById("shuffle").checked){
+    return document.getElementById("mode").value;
+  }
+  return ["fast","mid","slow"][rand(0,2)];
+}
 
-  // --- Tunables ---
-  const FAST_RATE = 2.2;   // snabbaste: "readygo" sammanslaget
-  const PAUSE_MID  = 700;  // Ready -> (700ms) -> go  ~ 1.5s total
-  const PAUSE_SLOW = 1100; // Ready -> (1100ms) -> go ~ 2.4s total
+function stopAll(){
+  Object.values(audio).forEach(a=>{
+    a.pause();
+    a.currentTime=0;
+  });
+}
 
-  function clearTimers() {
-    timers.forEach(t => clearTimeout(t));
-    timers = [];
+async function playOnce(){
+  stopAll();
+  const mode = pickMode();
+
+  if(mode==="mid"){
+    await audio.mid.play();
+    return;
   }
 
-  function randInt(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
+  await audio.ready.play();
+
+  const pause =
+    mode==="fast" ? 120 : 1600;
+
+  await new Promise(r=>setTimeout(r,pause));
+  await audio.go.play();
+}
+
+async function loop(){
+  if(!running) return;
+
+  await playOnce();
+
+  if(!document.getElementById("repeat").checked){
+    stop();
+    return;
   }
 
-  function setStatus(text) {
-    statusEl.firstChild.textContent = "Status: " + text + " ";
-  }
+  timer=setTimeout(loop,rand(3000,6000));
+}
 
-  // --- Start window selection ---
-  function pickStartWindow() {
-    // returns "2-4" or "3-6"
-    if (shuffleStartEl.checked) {
-      return randInt(0, 1) === 0 ? "2-4" : "3-6";
-    }
-    return document.querySelector('input[name="startWindow"]:checked').value;
-  }
+function start(){
+  running=true;
+  btn.textContent="STOPP";
+  btn.className="stop";
 
-  function getStartWindowMs() {
-    const v = pickStartWindow();
-    return v === '2-4' ? randInt(2000, 4000) : randInt(3000, 6000);
-  }
+  // iOS / Android audio unlock
+  audio.ready.volume=0;
+  audio.ready.play().then(()=>{
+    audio.ready.pause();
+    audio.ready.currentTime=0;
+    audio.ready.volume=1;
+  });
 
-  function getRepeatGapMs() {
-    return randInt(3000, 6000);
-  }
+  const d = document.querySelector('input[name="delay"]:checked').value;
+  const wait = d==="2-4" ? rand(2000,4000) : rand(3000,6000);
 
-  // --- Mode selection ---
-  function pickMode() {
-    if (!shuffleEl.checked) return modeEl.value; // fast/mid/slow
-    const modes = ["fast", "mid", "slow"];
-    return modes[randInt(0, modes.length - 1)];
-  }
+  document.getElementById("status").textContent =
+    "Start om " + Math.round(wait/1000) + " sek";
 
-  // --- Voices / TTS ---
-  function getVoicesSafe() {
-    try { return speechSynthesis.getVoices() || []; }
-    catch { return []; }
-  }
+  timer=setTimeout(loop,wait);
+}
 
-  function pickVoicePreferFemaleEn() {
-    const voices = getVoicesSafe();
-    if (!voices.length) return null;
-    const femaleHints = ["female","woman","jenny","susan","emma","zira","samantha"];
-    const en = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
-    const hinted = en.find(v => femaleHints.some(h => (v.name || "").toLowerCase().includes(h)));
-    return hinted || en[0] || voices[0];
-  }
+function stop(){
+  running=false;
+  clearTimeout(timer);
+  stopAll();
+  btn.textContent="START";
+  btn.className="start";
+  document.getElementById("status").textContent="Status: redo";
+}
 
-  let chosenVoice = null;
-
-  function refreshVoices() {
-    chosenVoice = pickVoicePreferFemaleEn();
-    const voices = getVoicesSafe();
-    voiceInfoEl.textContent = chosenVoice
-      ? `${chosenVoice.lang} • ${chosenVoice.name}`
-      : (voices.length ? "röst ej vald" : "röst laddas…");
-  }
-
-  async function ensureVoicesLoaded(maxWaitMs = 2500) {
-    const start = performance.now();
-    refreshVoices();
-    while (performance.now() - start < maxWaitMs) {
-      if (getVoicesSafe().length) return true;
-      await new Promise(r => setTimeout(r, 150));
-      refreshVoices();
-    }
-    return false;
-  }
-
-  speechSynthesis.onvoiceschanged = refreshVoices;
-  setTimeout(refreshVoices, 300);
-
-  function speak(text, rate) {
-    return new Promise(resolve => {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "en-US";
-      u.rate = rate;
-      if (chosenVoice) u.voice = chosenVoice;
-      u.onend = resolve;
-      u.onerror = resolve;
-      speechSynthesis.speak(u);
-    });
-  }
-
-  // --- Core speaking ---
-  async function speakOnce() {
-    await ensureVoicesLoaded();
-    if (!running) return;
-
-    speechSynthesis.cancel();
-
-    const mode = pickMode();
-
-    if (mode === "fast") {
-      setStatus("readygo!");
-      await speak("readygo", FAST_RATE);
-      return;
-    }
-
-    const pauseMs = mode === "mid" ? PAUSE_MID : PAUSE_SLOW;
-
-    setStatus("Ready...");
-    await speak("Ready", 1.0);
-    if (!running) return;
-
-    setStatus("...go");
-    await new Promise(r => timers.push(setTimeout(r, pauseMs)));
-    if (!running) return;
-
-    await speak("go!", 1.0);
-  }
-
-  async function runLoop(mySession) {
-    if (!running || mySession !== session) return;
-
-    await speakOnce();
-    if (!running || mySession !== session) return;
-
-    if (!repeatEl.checked) {
-      stop();
-      return;
-    }
-
-    const gap = getRepeatGapMs();
-    setStatus(`väntar (${Math.round(gap/1000)}s)`);
-    timers.push(setTimeout(() => runLoop(mySession), gap));
-  }
-
-  function lockControls(lock) {
-    document.querySelectorAll('input[name="startWindow"]').forEach(x => x.disabled = lock);
-    modeEl.disabled = lock;
-    shuffleEl.disabled = lock;
-    shuffleStartEl.disabled = lock;
-    repeatEl.disabled = lock;
-  }
-
-  async function start() {
-    running = true;
-    session++;
-    const mySession = session;
-
-    btn.textContent = "STOPP";
-    btn.classList.replace("start", "stop");
-    lockControls(true);
-
-    setStatus("laddar röst…");
-    await ensureVoicesLoaded();
-
-    const delay = getStartWindowMs();
-    setStatus(`start om ${Math.round(delay/1000)}s`);
-
-    clearTimers();
-    timers.push(setTimeout(() => {
-      if (!running || mySession !== session) return;
-      runLoop(mySession);
-    }, delay));
-  }
-
-  function stop() {
-    running = false;
-    clearTimers();
-    speechSynthesis.cancel();
-
-    btn.textContent = "START";
-    btn.classList.replace("stop", "start");
-    lockControls(false);
-
-    setStatus("redo");
-  }
-
-  btn.addEventListener("click", () => running ? stop() : start());
-  document.addEventListener("visibilitychange", () => document.hidden && running && stop());
-
-  refreshVoices();
-})();
+const btn=document.getElementById("btn");
+btn.onclick=()=> running ? stop() : start();
 </script>
 </body>
 </html>
