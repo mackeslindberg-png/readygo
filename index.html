@@ -4,33 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Ready Go</title>
-
 <style>
 html,body{margin:0;padding:0;min-height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
 body{
-  /* Fallback syns alltid */
-  background: radial-gradient(circle at 30% 10%, rgba(30,30,30,1), rgba(0,0,0,1));
-  display:flex; align-items:center; justify-content:center;
-  padding:16px;
-}
-/* Försök lägga bg.png ovanpå fallback */
-body.hasBg{
   background:
-    linear-gradient(rgba(0,0,0,.72),rgba(0,0,0,.72)),
+    linear-gradient(rgba(0,0,0,.75),rgba(0,0,0,.75)),
     url("bg.png") no-repeat center center fixed,
     radial-gradient(circle at 30% 10%, rgba(30,30,30,1), rgba(0,0,0,1));
-  background-size: cover;
-}
-
-.card{
-  width:100%;
-  max-width:520px;
-  background:rgba(255,255,255,.95);
-  border-radius:16px;
+  background-size:cover;
+  display:flex;align-items:center;justify-content:center;
   padding:16px;
+}
+.card{
+  width:100%;max-width:520px;
+  background:rgba(255,255,255,.95);
+  border-radius:16px;padding:16px;
   box-shadow:0 12px 30px rgba(0,0,0,.45);
 }
-
 h1{margin:0 0 12px 0}
 .row{margin:12px 0}
 label{display:flex;gap:10px;align-items:center}
@@ -44,7 +34,6 @@ button{border:none;font-weight:800;cursor:pointer}
 .pill{display:inline-block;padding:2px 8px;border:1px solid rgba(0,0,0,.15);border-radius:999px;font-size:12px;background:rgba(255,255,255,.7)}
 </style>
 </head>
-
 <body>
 <div class="card">
   <h1>Ready Go</h1>
@@ -79,7 +68,7 @@ button{border:none;font-weight:800;cursor:pointer}
   </div>
 
   <div class="small">
-    Mobilregel: första klicket låser upp ljud. Den här versionen gör det automatiskt på START.
+    Mobil: ljud låses upp på START. Efter det funkar shuffle + repetera utan nya klick.
   </div>
 </div>
 
@@ -87,38 +76,24 @@ button{border:none;font-weight:800;cursor:pointer}
 const FILES = {
   ready: "ready.mp3",
   go: "go.mp3",
-  mid: "ready_mid.mp3",
-  bg: "bg.png"
+  mid: "ready_mid.mp3"
 };
 
+let ctx = null;
+let buffers = { ready:null, go:null, mid:null };
 let running = false;
 let timer = null;
-let unlocked = false;
+let session = 0;
 
-// WebAudio unlock (stabilt på iPhone)
-let audioCtx = null;
-function ensureCtx() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  return audioCtx;
-}
+const diagEl = document.getElementById("diag");
+const statusEl = document.getElementById("status");
+const btn = document.getElementById("btn");
 
-// Skapa ny Audio varje gång så det aldrig “låser sig” (mobil-buggar)
-function newAudio(src) {
-  const a = new Audio(src);
-  a.preload = "auto";
-  a.playsInline = true;
-  return a;
-}
+function setDiag(t){ diagEl.textContent = t; }
+function setStatus(t){ statusEl.firstChild.textContent = "Status: " + t + " "; }
 
 function rand(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
-
-function setStatus(text){
-  document.getElementById("status").firstChild.textContent = "Status: " + text + " ";
-}
-
-function setDiag(text){
-  document.getElementById("diag").textContent = text;
-}
+function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function pickMode(){
   const shuffle = document.getElementById("shuffle").checked;
@@ -131,149 +106,118 @@ function delayWindowMs(){
   const d = document.querySelector('input[name="delay"]:checked').value;
   return d==="2-4" ? rand(2000,4000) : rand(3000,6000);
 }
-
 function repeatGapMs(){ return rand(3000,6000); }
 
-async function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+async function ensureAudio(){
+  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-async function playAndWaitEnd(a){
-  return new Promise(async (resolve, reject) => {
-    a.onended = () => resolve();
-    a.onerror = () => reject(new Error("audio error"));
-    try {
-      const p = a.play();
-      if (p && typeof p.then === "function") await p;
-    } catch (e) {
-      reject(e);
-    }
+  // Måste köras i user gesture (START-klick)
+  if (ctx.state !== "running") await ctx.resume();
+
+  // Ladda buffrar en gång
+  if (!buffers.ready || !buffers.go || !buffers.mid){
+    setDiag("laddar ljud…");
+    buffers.ready = await fetchDecode(FILES.ready);
+    buffers.go    = await fetchDecode(FILES.go);
+    buffers.mid   = await fetchDecode(FILES.mid);
+    setDiag("redo");
+  }
+}
+
+async function fetchDecode(url){
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error("404: " + url);
+  const arr = await r.arrayBuffer();
+  return await ctx.decodeAudioData(arr);
+}
+
+function playBuffer(buf){
+  return new Promise((resolve) => {
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.onended = resolve;
+    src.start(0);
   });
 }
 
-async function unlockAudioOnce(){
-  if (unlocked) return true;
-  try {
-    setDiag("unlock…");
-
-    const ctx = ensureCtx();
-    if (ctx.state !== "running") await ctx.resume();
-
-    // Prime HTMLAudio: spela tyst en extrem kort stund
-    const a = newAudio(FILES.ready);
-    a.volume = 0.0;
-    const p = a.play();
-    if (p && typeof p.then === "function") await p;
-    a.pause();
-    a.currentTime = 0;
-
-    unlocked = true;
-    setDiag("ljud ok");
-    return true;
-  } catch (e) {
-    setDiag("ljud block");
-    return false;
-  }
-}
-
-async function speakOnce(){
-  if (!running) return;
+async function speakOnce(mySession){
+  if (!running || mySession !== session) return;
 
   const mode = pickMode();
 
-  // MID: spela hela filen
-  if (mode === "mid") {
+  if (mode === "mid"){
     setStatus("mellan");
-    const mid = newAudio(FILES.mid);
-    await playAndWaitEnd(mid);
+    await playBuffer(buffers.mid);
     return;
   }
 
-  // FAST/SLOW: spela ready, vänta, spela go
   setStatus(mode === "fast" ? "snabb" : "långsam");
 
-  const ready = newAudio(FILES.ready);
-  await playAndWaitEnd(ready);
+  await playBuffer(buffers.ready);
 
-  // Paus mellan ready och go
   const pauseMs = (mode === "fast") ? 80 : 1600;
   if (pauseMs > 0) await wait(pauseMs);
 
-  const go = newAudio(FILES.go);
-  await playAndWaitEnd(go);
+  await playBuffer(buffers.go);
 }
 
-async function loop(){
-  if (!running) return;
+async function loop(mySession){
+  if (!running || mySession !== session) return;
 
   try {
-    await speakOnce();
+    await speakOnce(mySession);
   } catch (e) {
-    setDiag("fel: " + (e && e.message ? e.message : "ljud"));
+    setDiag("fel: " + (e?.message || "ljud"));
     stop();
     return;
   }
 
-  if (!running) return;
+  if (!running || mySession !== session) return;
 
-  if (!document.getElementById("repeat").checked) {
+  if (!document.getElementById("repeat").checked){
     stop();
     return;
   }
 
   const gap = repeatGapMs();
   setStatus("väntar " + Math.round(gap/1000) + " s");
-  timer = setTimeout(loop, gap);
+  timer = setTimeout(() => loop(mySession), gap);
 }
 
 function stop(){
   running = false;
   clearTimeout(timer);
   timer = null;
-  setStatus("redo");
   btn.textContent = "START";
   btn.className = "start";
+  setStatus("redo");
 }
 
 async function start(){
   running = true;
+  session++;
+  const mySession = session;
+
   btn.textContent = "STOPP";
   btn.className = "stop";
 
-  const ok = await unlockAudioOnce();
-  if (!ok) {
-    // Om iPhone fortfarande trilskas: be om ett extra klick
-    setStatus("tryck START igen");
+  try {
+    await ensureAudio(); // detta är hela tricket på mobil
+  } catch (e) {
+    setDiag("fel: " + (e?.message || "laddning"));
     stop();
     return;
   }
 
-  const waitMs = delayWindowMs();
-  setStatus("start om " + Math.round(waitMs/1000) + " s");
+  const w = delayWindowMs();
+  setStatus("start om " + Math.round(w/1000) + " s");
   clearTimeout(timer);
-  timer = setTimeout(loop, waitMs);
+  timer = setTimeout(() => loop(mySession), w);
 }
 
-const btn = document.getElementById("btn");
-btn.onclick = () => running ? stop() : start();
-
-// Bakgrund: markera om bg.png finns, annars fallback
-(async () => {
-  try {
-    const r = await fetch(FILES.bg, { method: "HEAD", cache: "no-store" });
-    if (r.ok) document.body.classList.add("hasBg");
-  } catch {}
-  // Snabb filcheck för ljud
-  try {
-    const checks = await Promise.all([
-      fetch(FILES.ready, { method:"HEAD", cache:"no-store" }),
-      fetch(FILES.go, { method:"HEAD", cache:"no-store" }),
-      fetch(FILES.mid, { method:"HEAD", cache:"no-store" })
-    ]);
-    const ok = checks.every(x => x.ok);
-    setDiag(ok ? "redo" : "saknar mp3");
-  } catch {
-    setDiag("saknar mp3");
-  }
-})();
+btn.addEventListener("click", () => running ? stop() : start());
+document.addEventListener("visibilitychange", () => document.hidden && running && stop());
 </script>
 </body>
 </html>
