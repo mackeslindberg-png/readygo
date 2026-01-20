@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Ready Go</title>
+
 <style>
 html,body{margin:0;padding:0;min-height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
 body{
@@ -34,6 +35,7 @@ button{border:none;font-weight:800;cursor:pointer}
 .pill{display:inline-block;padding:2px 8px;border:1px solid rgba(0,0,0,.15);border-radius:999px;font-size:12px;background:rgba(255,255,255,.7)}
 </style>
 </head>
+
 <body>
 <div class="card">
   <h1>Ready Go</h1>
@@ -61,14 +63,14 @@ button{border:none;font-weight:800;cursor:pointer}
     <label><input type="checkbox" id="repeat"> Repetera (3–6 sek)</label>
   </div>
 
-  <div class="status" id="status">Status: redo <span class="pill" id="diag">init…</span></div>
+  <div class="status" id="status">Status: redo <span class="pill" id="diag">redo</span></div>
 
   <div class="row">
     <button id="btn" class="start">START</button>
   </div>
 
   <div class="small">
-    Mobil: ljud låses upp på START. Efter det funkar shuffle + repetera utan nya klick.
+    Mobil: ljud låses upp på START. Shuffle + repetera funkar.
   </div>
 </div>
 
@@ -85,13 +87,12 @@ let running = false;
 let timer = null;
 let session = 0;
 
-const diagEl = document.getElementById("diag");
-const statusEl = document.getElementById("status");
 const btn = document.getElementById("btn");
+const statusEl = document.getElementById("status");
+const diagEl = document.getElementById("diag");
 
-function setDiag(t){ diagEl.textContent = t; }
 function setStatus(t){ statusEl.firstChild.textContent = "Status: " + t + " "; }
-
+function setDiag(t){ diagEl.textContent = t; }
 function rand(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
 function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
@@ -108,13 +109,21 @@ function delayWindowMs(){
 }
 function repeatGapMs(){ return rand(3000,6000); }
 
-async function ensureAudio(){
+function ensureCtx(){
   if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  return ctx;
+}
 
-  // Måste köras i user gesture (START-klick)
-  if (ctx.state !== "running") await ctx.resume();
+async function fetchDecode(url){
+  const r = await fetch(url, { cache:"no-store" });
+  if (!r.ok) throw new Error("404: " + url);
+  const arr = await r.arrayBuffer();
+  return await ensureCtx().decodeAudioData(arr);
+}
 
-  // Ladda buffrar en gång
+async function ensureAudio(){
+  const c = ensureCtx();
+  if (c.state !== "running") await c.resume();
   if (!buffers.ready || !buffers.go || !buffers.mid){
     setDiag("laddar ljud…");
     buffers.ready = await fetchDecode(FILES.ready);
@@ -124,15 +133,8 @@ async function ensureAudio(){
   }
 }
 
-async function fetchDecode(url){
-  const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error("404: " + url);
-  const arr = await r.arrayBuffer();
-  return await ctx.decodeAudioData(arr);
-}
-
 function playBuffer(buf){
-  return new Promise((resolve) => {
+  return new Promise(resolve=>{
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(ctx.destination);
@@ -156,7 +158,10 @@ async function speakOnce(mySession){
 
   await playBuffer(buffers.ready);
 
-  const pauseMs = (mode === "fast") ? 80 : 1600;
+  // >>> JUSTERING HÄR <<<
+  // Snabb: 55 ms (50–60 ms)
+  // Långsam: 1600 ms
+  const pauseMs = (mode === "fast") ? 55 : 1600;
   if (pauseMs > 0) await wait(pauseMs);
 
   await playBuffer(buffers.go);
@@ -168,7 +173,7 @@ async function loop(mySession){
   try {
     await speakOnce(mySession);
   } catch (e) {
-    setDiag("fel: " + (e?.message || "ljud"));
+    setDiag("fel");
     stop();
     return;
   }
@@ -182,7 +187,7 @@ async function loop(mySession){
 
   const gap = repeatGapMs();
   setStatus("väntar " + Math.round(gap/1000) + " s");
-  timer = setTimeout(() => loop(mySession), gap);
+  timer = setTimeout(()=>loop(mySession), gap);
 }
 
 function stop(){
@@ -203,9 +208,9 @@ async function start(){
   btn.className = "stop";
 
   try {
-    await ensureAudio(); // detta är hela tricket på mobil
-  } catch (e) {
-    setDiag("fel: " + (e?.message || "laddning"));
+    await ensureAudio();
+  } catch {
+    setDiag("blockerad");
     stop();
     return;
   }
@@ -213,11 +218,11 @@ async function start(){
   const w = delayWindowMs();
   setStatus("start om " + Math.round(w/1000) + " s");
   clearTimeout(timer);
-  timer = setTimeout(() => loop(mySession), w);
+  timer = setTimeout(()=>loop(mySession), w);
 }
 
-btn.addEventListener("click", () => running ? stop() : start());
-document.addEventListener("visibilitychange", () => document.hidden && running && stop());
+btn.onclick = () => running ? stop() : start();
+document.addEventListener("visibilitychange", ()=>document.hidden && running && stop());
 </script>
 </body>
 </html>
