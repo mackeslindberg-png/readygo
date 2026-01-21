@@ -133,10 +133,11 @@ async function ensureAudio(){
   }
 }
 
-function playBuffer(buf){
+function playBuffer(buf, rate=1.0){
   return new Promise(resolve=>{
     const src = ctx.createBufferSource();
     src.buffer = buf;
+    src.playbackRate.value = rate;
     src.connect(ctx.destination);
     src.onended = resolve;
     src.start(0);
@@ -148,23 +149,27 @@ async function speakOnce(mySession){
 
   const mode = pickMode();
 
-  if (mode === "mid"){
-    setStatus("mellan");
-    await playBuffer(buffers.mid);
+  // FAST: +20% talhastighet (rate 1.2) + kortare paus
+  if (mode === "fast"){
+    setStatus("snabb");
+    const rate = 1.2;
+    await playBuffer(buffers.ready, rate);
+    await wait(46);               // 55ms / 1.2 ≈ 46ms
+    await playBuffer(buffers.go, rate);
     return;
   }
 
-  setStatus(mode === "fast" ? "snabb" : "långsam");
+  if (mode === "mid"){
+    setStatus("mellan");
+    await playBuffer(buffers.mid, 1.0);
+    return;
+  }
 
-  await playBuffer(buffers.ready);
-
-  // >>> JUSTERING HÄR <<<
-  // Snabb: 55 ms (50–60 ms)
-  // Långsam: 1600 ms
-  const pauseMs = (mode === "fast") ? 55 : 1600;
-  if (pauseMs > 0) await wait(pauseMs);
-
-  await playBuffer(buffers.go);
+  // SLOW oförändrad
+  setStatus("långsam");
+  await playBuffer(buffers.ready, 1.0);
+  await wait(1600);
+  await playBuffer(buffers.go, 1.0);
 }
 
 async function loop(mySession){
@@ -172,7 +177,7 @@ async function loop(mySession){
 
   try {
     await speakOnce(mySession);
-  } catch (e) {
+  } catch {
     setDiag("fel");
     stop();
     return;
