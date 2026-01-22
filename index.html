@@ -34,7 +34,7 @@ body{
   content:"";
   position:absolute;
   inset:0;
-  background: rgba(255,255,255,.78); /* justera transparens här */
+  background: rgba(255,255,255,.78);
   pointer-events:none;
 }
 
@@ -89,8 +89,8 @@ button{border:none;font-weight:800;cursor:pointer}
   </div>
 
   <div class="small">
-    MP3-läge. Mindre "chipmunk": alla lägen använder samma taltempo som "Mellan".
-    Snabb och långsam styrs främst av pauslängd men håller total-tiderna 0,5s / 1,0s / 1,5s.
+    MP3-läge. “Mellan” sätter taltempot. “Snabb” blir kortare med mindre/ingen paus.
+    “Långsam” har samma taltempo som mellan men längre paus mellan Ready och Go.
   </div>
 </div>
 
@@ -100,10 +100,11 @@ const FILES = {
   go: "go.mp3"
 };
 
-// Total tid (Ready + paus + Go)
+// Total tid = Ready + paus + Go
+// (Jag behåller långsam = 1.5s som tidigare, eftersom du inte ändrade den.)
 const TARGET_SECONDS = {
-  fast: 0.50,
-  mid:  1.00,
+  fast: 0.80,
+  mid:  1.20,
   slow: 1.50
 };
 
@@ -176,64 +177,63 @@ function modeLabel(mode){
   return "långsam";
 }
 
-/**
- * Ny logik (mindre chipmunk):
- * 1) Räkna fram ett "naturligt" rateMid som träffar mellan-läget (1,0s) med en liten paus.
- * 2) Använd samma rateMid i ALLA lägen.
- * 3) Snabb/långsam uppnås med paus så att totalen blir 0,5s resp 1,5s.
- *
- * OBS: Om 0,5s är fysiskt omöjligt med rateMid (filernas längd för lång),
- * så kommer pausen bli 0 och snabb blir "så snabb det går" med samma tempo som mellan.
- */
+/*
+  Logik:
+  - Räkna fram ett "mellan-tempo" (rateMid) som träffar 1.20s med en liten naturlig paus.
+  - Snabb: samma rateMid, men kortare paus så totalen blir 0.80s (kan bli 0ms).
+  - Långsam: samma rateMid, men längre paus så totalen blir 1.50s.
+*/
 function computeParams(mode){
   const durReady = buffers.ready.duration;
   const durGo = buffers.go.duration;
   const sumDur = durReady + durGo;
 
-  // 1) Hitta rateMid
-  const targetMid = TARGET_SECONDS.mid; // 1.00s
-
-  // liten standardpaus i mellan
-  let midPauseSec = Math.min(0.18, Math.max(0.02, targetMid * 0.08));
-  let midAvail = targetMid - midPauseSec;
-  if (midAvail <= 0.05){ midPauseSec = 0; midAvail = targetMid; }
-
-  let rateMid = sumDur / midAvail;
-
-  // rimliga gränser
   const MIN_RATE = 0.40;
   const MAX_RATE = 6.00;
 
-  // om för hög rate, ta bort paus och räkna om
+  // 1) Bestäm "mellan"-tempo
+  const targetMid = TARGET_SECONDS.mid; // 1.20
+  // liten standardpaus för att det ska kännas som två ord
+  let baseMidPauseSec = 0.10; // 100ms, stabilt och “naturligt”
+  let midAvail = targetMid - baseMidPauseSec;
+  if (midAvail < 0.05){ baseMidPauseSec = 0; midAvail = targetMid; }
+
+  let rateMid = sumDur / midAvail;
+
+  // om det kräver för hög rate, ta bort paus och räkna om
   if (rateMid > MAX_RATE){
-    midPauseSec = 0;
+    baseMidPauseSec = 0;
     rateMid = sumDur / targetMid;
   }
   rateMid = Math.max(MIN_RATE, Math.min(MAX_RATE, rateMid));
 
-  // 2) Sätt pause per mode för att nå target med samma rateMid
+  // 2) Sätt paus för valt läge med samma rate
   const target = TARGET_SECONDS[mode];
+
+  // total = (sumDur / rateMid) + pause
   let pauseSec = target - (sumDur / rateMid);
 
-  // clampa paus
+  // clamp paus (fast kan behöva 0)
   pauseSec = Math.max(0, pauseSec);
   pauseSec = Math.min(5.0, pauseSec);
 
-  // Special: i mid vill vi behålla den "lilla naturliga" pausen om möjligt
-  // men fortfarande prio att träffa 1.0s totalt
-  if (mode === "mid"){
-    // om den räknade pausen är extremt liten, använd standard
-    // annars använd exakt för att träffa totalen
-    // (vi tar exakt pausen, men begränsar den lite)
-    // lämna som den är (exact pauseSec), men om 0 så lägg liten paus
-    if (pauseSec === 0) pauseSec = midPauseSec;
+  // För mid: försök behålla lite "ordkänsla" om möjligt
+  if (mode === "mid" && pauseSec < 0.06) pauseSec = 0.06;
+
+  // För fast: om vi ändå blir "för lång" även med 0 paus,
+  // då går det inte att nå 0.80s utan att öka rate (chipmunk).
+  // Vi prioriterar mindre chipmunk: behåller rateMid och 0 paus.
+  if (mode === "fast"){
+    const minTotal = (sumDur / rateMid); // paus=0
+    if (minTotal > TARGET_SECONDS.fast){
+      pauseSec = 0;
+    }
   }
 
   return {
     rate: rateMid,
     pauseMs: Math.round(pauseSec * 1000),
-    target,
-    rateMid
+    target
   };
 }
 
