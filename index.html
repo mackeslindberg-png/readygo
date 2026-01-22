@@ -24,6 +24,7 @@ body{
   background-image: url("bg.png");
   background-size: cover;
   background-position: center;
+
   position: relative;
   overflow: hidden;
 }
@@ -33,7 +34,7 @@ body{
   content:"";
   position:absolute;
   inset:0;
-  background: rgba(255,255,255,.78); /* justera för mer/mindre transparens */
+  background: rgba(255,255,255,.78); /* justera transparens här */
   pointer-events:none;
 }
 
@@ -88,7 +89,8 @@ button{border:none;font-weight:800;cursor:pointer}
   </div>
 
   <div class="small">
-    Mobil: talsyntes kräver ofta ett klick på START första gången.
+    Tips: Första gången på mobil kan talsyntes kräva ett klick på START.
+    Appen auto-kalibrerar hastighet per läge på just den här enheten.
   </div>
 </div>
 
@@ -104,6 +106,7 @@ const diagEl = document.getElementById("diag");
 function setStatus(t){ statusEl.firstChild.textContent = "Status: " + t + " "; }
 function setDiag(t){ diagEl.textContent = t; }
 function rand(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function wait(ms){ return new Promise(r => setTimeout(r, ms)); }
 
 function pickMode(){
   const shuffle = document.getElementById("shuffle").checked;
@@ -122,61 +125,112 @@ function stopSpeak(){
   try { window.speechSynthesis.cancel(); } catch {}
 }
 
-function speak(text, rate=1.0, pitch=1.0, lang="sv-SE"){
+/* Måltider (sekunder) */
+const TARGET_SECONDS = { fast: 0.50, mid: 1.00, slow: 1.50 };
+
+/* Spara per enhet */
+const RATE_KEY = "rg_rates_v1";
+
+/* Startvärden (justeras automatiskt) */
+let rates = loadRates() || { fast: 1.8, mid: 1.0, slow: 0.75 };
+
+function loadRates(){
+  try { return JSON.parse(localStorage.getItem(RATE_KEY)); } catch { return null; }
+}
+function saveRates(){
+  try { localStorage.setItem(RATE_KEY, JSON.stringify(rates)); } catch {}
+}
+
+function speakMeasured(text, rate=1.0, pitch=1.0, lang="sv-SE"){
   return new Promise((resolve, reject) => {
     if (!("speechSynthesis" in window)) return reject(new Error("no-tts"));
-
-    // Viktigt: rensa kö för att undvika att det staplas på mobil
-    stopSpeak();
 
     const u = new SpeechSynthesisUtterance(text);
     u.lang = lang;
     u.rate = rate;
     u.pitch = pitch;
 
-    u.onend = resolve;
+    let t0 = 0;
+    u.onstart = () => { t0 = performance.now(); };
+    u.onend = () => {
+      const dt = (performance.now() - t0) / 1000;
+      resolve(dt);
+    };
     u.onerror = () => reject(new Error("tts-error"));
 
     window.speechSynthesis.speak(u);
   });
 }
 
-function wait(ms){ return new Promise(r => setTimeout(r, ms)); }
+/* Väck talsyntes efter klick (bra på iPhone). Mäter inte, påverkar inte kalibrering. */
+async function warmupTTS(){
+  if (!("speechSynthesis" in window)) return;
+  try {
+    stopSpeak();
+    const u = new SpeechSynthesisUtterance(" ");
+    u.lang = "sv-SE";
+    u.rate = 1.0;
+    u.pitch = 1.0;
+    window.speechSynthesis.speak(u);
+  } catch {}
+}
+
+function adaptRate(mode, actualSec){
+  const target = TARGET_SECONDS[mode];
+  if (!target || !actualSec || actualSec <= 0) return;
+
+  // Om vi redan är nära, låt det vara
+  const err = Math.abs(actualSec - target);
+  if (err < 0.05) return;
+
+  // ratio > 1: för långsam => höj rate
+  const ratio = actualSec / target;
+
+  // Dämpad justering för stabilitet
+  const factor = Math.pow(ratio, 0.7);
+
+  let newRate = (rates[mode] ?? 1.0) * factor;
+
+  // clamp
+  newRate = Math.max(0.1, Math.min(3.0, newRate));
+
+  rates[mode] = newRate;
+  saveRates();
+}
+
+function modeLabel(mode){
+  if (mode === "fast") return "snabb";
+  if (mode === "mid") return "mellan";
+  return "långsam";
+}
 
 async function speakOnce(mySession){
   if (!running || mySession !== session) return;
 
   const mode = pickMode();
+  const r = rates[mode] ?? 1.0;
 
-  if (mode === "fast"){
-    setStatus("snabb");
-    const rate = 1.2;            // +20%
-    await speak("Ready", rate);
-    await wait(60);              // liten paus
-    await speak("Go", rate);
-    return;
-  }
+  setStatus(modeLabel(mode));
 
-  if (mode === "mid"){
-    setStatus("mellan");
-    await speak("Ready go", 1.0);
-    return;
-  }
+  // Cancel en gång per fras (inte mellan ord)
+  stopSpeak();
 
-  setStatus("långsam");
-  await speak("Ready", 1.0);
-  await wait(1600);
-  await speak("Go", 1.0);
+  // En enda fras: stabilare på mobil och enklare att tidstyra
+  const actual = await speakMeasured("Ready go", r);
+
+  // Diagnos: visar läge + faktisk tid
+  setDiag(`${modeLabel(mode)} ${actual.toFixed(2)}s`);
+
+  // Auto-kalibrera mot 0.50 / 1.00 / 1.50 sek
+  adaptRate(mode, actual);
 }
 
 async function loop(mySession){
   if (!running || mySession !== session) return;
 
   try {
-    setDiag("kör");
     await speakOnce(mySession);
-    setDiag("redo");
-  } catch (e) {
+  } catch {
     setDiag("fel");
     stop();
     return;
@@ -213,16 +267,9 @@ async function start(){
   btn.textContent = "STOPP";
   btn.className = "stop";
 
-  // “Väck” talsyntesen direkt efter klick (mobilvänligt)
-  try {
-    setDiag("init");
-    await speak(" ", 1.0); // tom-ish utterance för att trigga user gesture-låset
-    setDiag("redo");
-  } catch {
-    // Om den misslyckas här kan det fortfarande fungera när vi kör skarpt,
-    // men diagnosen är bra att ha.
-    setDiag("blockerad");
-  }
+  setDiag("init");
+  await warmupTTS();
+  setDiag("redo");
 
   const w = delayWindowMs();
   setStatus("start om " + Math.round(w/1000) + " s");
