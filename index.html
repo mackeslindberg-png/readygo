@@ -38,7 +38,7 @@ body{
   pointer-events:none;
 }
 
-/* Se till att innehållet ligger över overlayn */
+/* Innehåll över overlay */
 .card > *{ position: relative; }
 
 h1{margin:0 0 12px 0}
@@ -89,12 +89,25 @@ button{border:none;font-weight:800;cursor:pointer}
   </div>
 
   <div class="small">
-    Tips: Första gången på mobil kan talsyntes kräva ett klick på START.
-    Appen auto-kalibrerar hastighet per läge på just den här enheten.
+    MP3-läge: håller exakt total-tid per läge (snabb 0,5s, mellan 1,0s, långsam 1,5s) genom att justera playbackRate + liten paus.
   </div>
 </div>
 
 <script>
+const FILES = {
+  ready: "ready.mp3",
+  go: "go.mp3"
+};
+
+// Total tid (Ready + paus + Go)
+const TARGET_SECONDS = {
+  fast: 0.50,
+  mid:  1.00,
+  slow: 1.50
+};
+
+let ctx = null;
+let buffers = { ready:null, go:null };
 let running = false;
 let timer = null;
 let session = 0;
@@ -106,7 +119,7 @@ const diagEl = document.getElementById("diag");
 function setStatus(t){ statusEl.firstChild.textContent = "Status: " + t + " "; }
 function setDiag(t){ diagEl.textContent = t; }
 function rand(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
-function wait(ms){ return new Promise(r => setTimeout(r, ms)); }
+function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function pickMode(){
   const shuffle = document.getElementById("shuffle").checked;
@@ -121,81 +134,39 @@ function delayWindowMs(){
 }
 function repeatGapMs(){ return rand(3000,6000); }
 
-function stopSpeak(){
-  try { window.speechSynthesis.cancel(); } catch {}
+function ensureCtx(){
+  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  return ctx;
 }
 
-/* Måltider (sekunder) */
-const TARGET_SECONDS = { fast: 0.50, mid: 1.00, slow: 1.50 };
-
-/* Spara per enhet */
-const RATE_KEY = "rg_rates_v1";
-
-/* Startvärden (justeras automatiskt) */
-let rates = loadRates() || { fast: 1.8, mid: 1.0, slow: 0.75 };
-
-function loadRates(){
-  try { return JSON.parse(localStorage.getItem(RATE_KEY)); } catch { return null; }
-}
-function saveRates(){
-  try { localStorage.setItem(RATE_KEY, JSON.stringify(rates)); } catch {}
+async function fetchDecode(url){
+  const r = await fetch(url, { cache:"no-store" });
+  if (!r.ok) throw new Error("404: " + url);
+  const arr = await r.arrayBuffer();
+  return await ensureCtx().decodeAudioData(arr);
 }
 
-function speakMeasured(text, rate=1.0, pitch=1.0, lang="sv-SE"){
-  return new Promise((resolve, reject) => {
-    if (!("speechSynthesis" in window)) return reject(new Error("no-tts"));
+async function ensureAudio(){
+  const c = ensureCtx();
+  if (c.state !== "running") await c.resume();
 
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang;
-    u.rate = rate;
-    u.pitch = pitch;
+  if (!buffers.ready || !buffers.go){
+    setDiag("laddar ljud…");
+    buffers.ready = await fetchDecode(FILES.ready);
+    buffers.go    = await fetchDecode(FILES.go);
+    setDiag("redo");
+  }
+}
 
-    let t0 = 0;
-    u.onstart = () => { t0 = performance.now(); };
-    u.onend = () => {
-      const dt = (performance.now() - t0) / 1000;
-      resolve(dt);
-    };
-    u.onerror = () => reject(new Error("tts-error"));
-
-    window.speechSynthesis.speak(u);
+function playBuffer(buf, rate=1.0){
+  return new Promise(resolve=>{
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    src.connect(ctx.destination);
+    src.onended = resolve;
+    src.start(0);
   });
-}
-
-/* Väck talsyntes efter klick (bra på iPhone). Mäter inte, påverkar inte kalibrering. */
-async function warmupTTS(){
-  if (!("speechSynthesis" in window)) return;
-  try {
-    stopSpeak();
-    const u = new SpeechSynthesisUtterance(" ");
-    u.lang = "sv-SE";
-    u.rate = 1.0;
-    u.pitch = 1.0;
-    window.speechSynthesis.speak(u);
-  } catch {}
-}
-
-function adaptRate(mode, actualSec){
-  const target = TARGET_SECONDS[mode];
-  if (!target || !actualSec || actualSec <= 0) return;
-
-  // Om vi redan är nära, låt det vara
-  const err = Math.abs(actualSec - target);
-  if (err < 0.05) return;
-
-  // ratio > 1: för långsam => höj rate
-  const ratio = actualSec / target;
-
-  // Dämpad justering för stabilitet
-  const factor = Math.pow(ratio, 0.7);
-
-  let newRate = (rates[mode] ?? 1.0) * factor;
-
-  // clamp
-  newRate = Math.max(0.1, Math.min(3.0, newRate));
-
-  rates[mode] = newRate;
-  saveRates();
 }
 
 function modeLabel(mode){
@@ -204,25 +175,60 @@ function modeLabel(mode){
   return "långsam";
 }
 
+/**
+ * Räknar fram playbackRate + paus så att:
+ * (readyDur/rate) + pause + (goDur/rate) ~= target
+ *
+ * Vi lägger en liten pausandel så det fortfarande känns som två ord.
+ */
+function computeParams(mode){
+  const target = TARGET_SECONDS[mode];
+  const durReady = buffers.ready.duration;
+  const durGo = buffers.go.duration;
+  const sumDur = durReady + durGo;
+
+  // liten pausandel (8% av totalen), clampad
+  let pauseSec = Math.min(0.18, Math.max(0.02, target * 0.08));
+
+  // Om target är extremt kort i förhållande till ljudfilernas längd,
+  // minska paus för att inte tvinga orimliga rates.
+  let avail = target - pauseSec;
+  if (avail <= 0.05){
+    pauseSec = 0;
+    avail = target;
+  }
+
+  let rate = sumDur / avail;
+
+  // Sane limits (du kan höja max om du vill)
+  const MIN_RATE = 0.40;
+  const MAX_RATE = 6.00;
+
+  if (rate > MAX_RATE){
+    // Försök med noll paus först
+    pauseSec = 0;
+    rate = sumDur / target;
+  }
+
+  rate = Math.max(MIN_RATE, Math.min(MAX_RATE, rate));
+
+  return { rate, pauseMs: Math.round(pauseSec * 1000), target };
+}
+
 async function speakOnce(mySession){
   if (!running || mySession !== session) return;
 
   const mode = pickMode();
-  const r = rates[mode] ?? 1.0;
-
   setStatus(modeLabel(mode));
 
-  // Cancel en gång per fras (inte mellan ord)
-  stopSpeak();
+  const { rate, pauseMs, target } = computeParams(mode);
 
-  // En enda fras: stabilare på mobil och enklare att tidstyra
-  const actual = await speakMeasured("Ready go", r);
+  // diag: visar vad vi siktar på och vad vi använder
+  setDiag(`${modeLabel(mode)} ${target.toFixed(2)}s · rate ${rate.toFixed(2)} · paus ${pauseMs}ms`);
 
-  // Diagnos: visar läge + faktisk tid
-  setDiag(`${modeLabel(mode)} ${actual.toFixed(2)}s`);
-
-  // Auto-kalibrera mot 0.50 / 1.00 / 1.50 sek
-  adaptRate(mode, actual);
+  await playBuffer(buffers.ready, rate);
+  if (pauseMs > 0) await wait(pauseMs);
+  await playBuffer(buffers.go, rate);
 }
 
 async function loop(mySession){
@@ -245,14 +251,13 @@ async function loop(mySession){
 
   const gap = repeatGapMs();
   setStatus("väntar " + Math.round(gap/1000) + " s");
-  timer = setTimeout(() => loop(mySession), gap);
+  timer = setTimeout(()=>loop(mySession), gap);
 }
 
 function stop(){
   running = false;
   clearTimeout(timer);
   timer = null;
-  stopSpeak();
   btn.textContent = "START";
   btn.className = "start";
   setStatus("redo");
@@ -267,18 +272,22 @@ async function start(){
   btn.textContent = "STOPP";
   btn.className = "stop";
 
-  setDiag("init");
-  await warmupTTS();
-  setDiag("redo");
+  try {
+    await ensureAudio();
+  } catch {
+    setDiag("blockerad");
+    stop();
+    return;
+  }
 
   const w = delayWindowMs();
   setStatus("start om " + Math.round(w/1000) + " s");
   clearTimeout(timer);
-  timer = setTimeout(() => loop(mySession), w);
+  timer = setTimeout(()=>loop(mySession), w);
 }
 
 btn.onclick = () => running ? stop() : start();
-document.addEventListener("visibilitychange", () => document.hidden && running && stop());
+document.addEventListener("visibilitychange", ()=>document.hidden && running && stop());
 </script>
 </body>
 </html>
